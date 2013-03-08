@@ -1,289 +1,280 @@
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.std_logic_unsigned.all;
-use ieee.numeric_std.all;
+
+LIBRARY IEEE;
+USE  IEEE.STD_LOGIC_1164.all;
+USE  IEEE.STD_LOGIC_ARITH.all;
+USE  IEEE.STD_LOGIC_UNSIGNED.all;
+
+ENTITY mouse_driver IS
 
 
-entity mouse_driver is
-  
-    port 
-    (
-        mclk : in std_logic;  -- horloge systeme
-        rst : in std_logic;  -- reset general du circuit
-
-        donnee_souris  : inout std_logic;   -- bidirectionnel
-        horloge_souris : inout std_logic;   -- la souris fournie l'horloge
-
-        position_h     : out   std_logic_vector(9 downto 0);  -- excursion -512 à +511
-        position_v     : out   std_logic_vector(9 downto 0);  -- -512 +511
-        etat_souris    : out   std_logic_vector(7 downto 0)
-    );
-
-end mouse_driver;
-
-architecture arch_mouse_driver of mouse_driver is
-
-  signal fin_tempo : std_logic;
-  signal fin_octet : std_logic;
-  signal fin_emission : std_logic;
-  signal fin_trame : std_logic;
-  signal data_in : std_logic;
-  signal data_out : std_logic;
-  signal clk_in : std_logic;
-  signal hs_filtree : std_logic;    -- horloge souris filtree
-  
-  signal recevoir, emettre, calculer : boolean;
-  signal init_tempo, direction_donnee: boolean;
-  signal direction_horloge : boolean; 
-  signal mouvement_h : signed(8 downto 0);
-  signal mouvement_v : signed(8 downto 0);
-  signal sig_etat_souris : std_logic_vector(7 downto 0);
-  
-  type communication_mef is (debut, tempo, rts, emission, reception1, debut_trame, reception3,calcul);
-  signal state_mef : communication_mef;
-  
-  
-begin
-  
-    -- separation des donnes en entree et sortie
-    data_in <= donnee_souris;
-    donnee_souris <= data_out when direction_donnee else 'Z';
-
-
-    -- separation des horloges en entree et sortie
-    horloge_souris <= '0' when direction_horloge else 'Z';
-    clk_in <= horloge_souris ;
-
-
-    -- par securite, on introduit un filtre anti-parasite sur
-    -- l'horloge souris qui consiste à valider un 1 ou un 0 par 8 echantillons
-    filtre : process 
-  
-        variable registre : std_logic_vector(7 downto 0);
-    
-    begin
-  
-        wait until rising_edge(mclk);
+   PORT( mclk, rst 			: IN std_logic;
+         donnee_souris				: INOUT std_logic;
+         horloge_souris 				: INOUT std_logic;
         
-            registre := registre(6 downto 0) & clk_in ;
-            
-            if registre = "11111111" then
-            
-              hs_filtree <= '1';    -- filtre de 320 ns car période min horloge souris = 30us
-              
-            elsif registre = "00000000" then
-            
-              hs_filtree <= '0'; 
-              
-            end if;
-    
-    end process filtre;
+		 position_h 		: OUT std_logic_vector(9 DOWNTO 0); 
+		 position_v 		: OUT std_logic_vector(9 DOWNTO 0);
+         etat_souris    : out   std_logic_vector(7 downto 0));       
+		
+		
+END mouse_driver;
+
+ARCHITECTURE behavior OF mouse_driver IS
+
+TYPE STATE_TYPE IS (INHIBIT_TRANS, LOAD_COMMAND,LOAD_COMMAND2, WAIT_OUTPUT_READY,
+					WAIT_CMD_ACK, INPUT_PACKETS);
+
+-- Signals for Mouse
+SIGNAL mouse_state							: state_type;
+signal NEW_etat_souris : std_logic_vector(7 downto 0);
+SIGNAL inhibit_wait_count					: std_logic_vector(10 DOWNTO 0);
+SIGNAL CHARIN, CHAROUT						: std_logic_vector(7 DOWNTO 0);
+SIGNAL new_cursor_row, new_cursor_column 	: std_logic_vector(9 DOWNTO 0);
+SIGNAL cursor_row, cursor_column 			: std_logic_vector(9 DOWNTO 0);
+SIGNAL INCNT, OUTCNT, mSB_OUT 				: std_logic_vector(3 DOWNTO 0);
+SIGNAL PACKET_COUNT 						: std_logic_vector(1 DOWNTO 0);
+SIGNAL SHIFTIN 								: std_logic_vector(8 DOWNTO 0);
+SIGNAL SHIFTOUT 							: std_logic_vector(10 DOWNTO 0);
+SIGNAL PACKET_CHAR1, PACKET_CHAR2, 
+		PACKET_CHAR3 						: std_logic_vector(7 DOWNTO 0); 
+SIGNAL horloge_souris_BUF, DATA_READY, READ_CHAR	: std_logic;
+SIGNAL i									: integer;
+SIGNAL cursor, iready_set, break, toggle_next, 
+		output_ready, send_char, send_data 	: std_logic;
+SIGNAL donnee_souris_DIR, donnee_souris_OUT, donnee_souris_BUF, 
+		horloge_souris_DIR 						: std_logic;
+SIGNAL horloge_souris_FILTER 					: std_logic;
+SIGNAL filter 								: std_logic_vector(7 DOWNTO 0);
 
 
--- la temporisation sert à maintenir l'horloge souris
-  -- pendant 100 us environ lorsque le systeme veut commander
-  -- la souris
-    temporisation : process 
+BEGIN
 
-        constant duree : natural := 2500;    -- 100 us
-        
-        variable decompteur : natural range 0 to duree;
+position_h <= cursor_row;
+position_v <= cursor_column;
+etat_souris <= NEW_etat_souris;
 
-    begin
-  
-        wait until falling_edge(mclk);  -- synchrone
-        
-            if init_tempo then
-            
-                decompteur := duree;
-                fin_tempo <= '0';
-                
-            elsif decompteur /=  0 then
-            
-                decompteur := decompteur -1;
-                
-            else
-            
-                fin_tempo <= '1';
-                
-            end if;
-            
-    end process temporisation;
+			-- tri_state control logic for mouse data and clock lines
+donnee_souris <= 'Z' WHEN donnee_souris_DIR = '0' ELSE donnee_souris_BUF;
+horloge_souris <=  'Z' WHEN horloge_souris_DIR = '0' ELSE horloge_souris_BUF;
 
+			-- state machine to send init command and start recv process.
+	PROCESS (rst, mclk)
+	BEGIN
+		IF rst = '1' THEN
+			mouse_state <= INHIBIT_TRANS;
+			inhibit_wait_count <= conv_std_logic_vector(0,11);
+			SEND_DATA <= '0';
+		ELSIF mclk'EVENT AND mclk = '1' THEN
+			CASE mouse_state IS
+-- Mouse powers up and sends self test codes, AA and 00 out before board is downloaded
+-- Pull clock line low to inhibit any transmissions from mouse
+-- Need at least 60usec to stop a transmission in progress
+-- Note: This is perhaps optional since mouse should not be tranmitting
+				WHEN INHIBIT_TRANS =>
+				inhibit_wait_count <= inhibit_wait_count + 1;
+				IF inhibit_wait_count(10 DOWNTO 9) = "11" THEN
+						mouse_state <= LOAD_COMMAND;
+				END IF;
+					-- Enable Streaming Mode Command, F4
+						charout <= "11110100";
+					-- Pull data low to signal data available to mouse
+				WHEN LOAD_COMMAND =>
+						SEND_DATA <= '1';
+						mouse_state <= LOAD_COMMAND2;
+				WHEN LOAD_COMMAND2 =>
+						SEND_DATA <= '1';
+						mouse_state <= WAIT_OUTPUT_READY;
+		-- Wait for Mouse to Clock out all bits in command.
+		-- Command sent is F4, Enable Streaming Mode
+		-- This tells the mouse to start sending 3-byte packets with movement data
+				WHEN WAIT_OUTPUT_READY =>
+					SEND_DATA <= '0';
+			-- Output Ready signals that all data is clocked out of shift register
+					IF OUTPUT_READY='1' THEN
+						mouse_state <= WAIT_CMD_ACK;
+					ELSE
+						mouse_state <= WAIT_OUTPUT_READY;
+					END IF;
+		-- Wait for Mouse to send back Command Acknowledge, FA
+				WHEN WAIT_CMD_ACK =>
+					SEND_DATA <= '0';
+					IF IREADY_SET='1' THEN
+						mouse_state <= INPUT_PACKETS;
+					END IF;
+		-- Release mclk and data lines and go into mouse input mode
+		-- Stay in this state and recieve 3-byte mouse data packets forever
+		-- Default rate is 100 packets per second
+				WHEN INPUT_PACKETS =>
+						mouse_state <= INPUT_PACKETS;
+			END CASE;
+		END IF;
+	END PROCESS;
 
-    -- le registre emission ne sert qu'a emettre la commande "stream mode"
-    emiss : process(emettre, hs_filtree)
+	WITH mouse_state SELECT
+-- Mouse Data Tri-state control line: '1' FLEX Chip drives, '0'=Mouse Drives
+		donnee_souris_DIR 	<=	'0'	WHEN INHIBIT_TRANS,
+							'0'	WHEN LOAD_COMMAND,
+							'0'	WHEN LOAD_COMMAND2,
+							'1'	WHEN WAIT_OUTPUT_READY,
+							'0'	WHEN WAIT_CMD_ACK,
+							'0'	WHEN INPUT_PACKETS;
+-- Mouse Clock Tri-state control line: '1' FLEX Chip drives, '0'=Mouse Drives
+	WITH mouse_state SELECT
+		horloge_souris_DIR 	<=	'1'	WHEN INHIBIT_TRANS,
+							'1'	WHEN LOAD_COMMAND,
+							'1'	WHEN LOAD_COMMAND2,
+							'0'	WHEN WAIT_OUTPUT_READY,
+							'0'	WHEN WAIT_CMD_ACK,
+							'0'	WHEN INPUT_PACKETS;
+	WITH mouse_state SELECT
+-- Input to FLEX chip tri-state buffer mouse mclk line
+		horloge_souris_BUF 	<=	'0'	WHEN INHIBIT_TRANS,
+							'1'	WHEN LOAD_COMMAND,
+							'1'	WHEN LOAD_COMMAND2,
+							'1'	WHEN WAIT_OUTPUT_READY,
+							'1'	WHEN WAIT_CMD_ACK,
+							'1'	WHEN INPUT_PACKETS;
 
-        constant mot_f4 : std_logic_vector(11 downto 0) := "010111101000";
+-- filter for mouse clock
+PROCESS
+BEGIN
+		WAIT UNTIL mclk'event and mclk = '1';
+		filter(7 DOWNTO 1) <= filter(6 DOWNTO 0);
+		filter(0) <= horloge_souris;
+		IF filter = "11111111" THEN
+			horloge_souris_FILTER <= '1';
+		ELSIF filter = "00000000" THEN
+			horloge_souris_FILTER <= '0';
+		END IF;
+END PROCESS;
 
-        variable nb_bits : natural range 0 to 11;
-        variable registre_emission : std_logic_vector(11 downto 0);
-    
-    begin
+	--This process sends serial data going to the mouse
+SEND_UART: PROCESS (send_data, horloge_souris_filter)
+BEGIN
+IF SEND_DATA = '1' THEN
+	OUTCNT <= "0000";
+    SEND_CHAR <= '1';
+	OUTPUT_READY <= '0';
+		-- Send out Start Bit(0) + Command(F4) + Parity  Bit(0) + Stop Bit(1)
+	SHIFTOUT(8 DOWNTO 1) <= CHAROUT ;
+		-- START BIT
+	SHIFTOUT(0) <= '0';
+		-- COMPUTE ODD PARITY BIT
+	SHIFTOUT(9) <=  not (charout(7) xor charout(6) xor charout(5) xor 
+		charout(4) xor Charout(3) xor charout(2) xor charout(1) xor 
+		charout(0));
+		-- STOP BIT 
+	SHIFTOUT(10) <= '1';
+		-- Data Available Flag to Mouse
+		-- Tells mouse to clock out command data (is also start bit)
+    donnee_souris_BUF <= '0';
 
-        if emettre = false then -- asynchrone
-        
-            registre_emission := mot_f4;
-            nb_bits := 0;
-            
-        elsif falling_edge(hs_filtree) then  -- synchrone
-        
-            registre_emission := '0' & registre_emission(11 downto 1); 
-            nb_bits := nb_bits + 1;
-            
-        end if;
-        
-        if nb_bits = 11 then
-        
-            fin_emission <= '1';
-            
-        else
-        
-            fin_emission <= '0';
-            
-        end if;
-        
-        data_out <= registre_emission(0);
+ELSIF(horloge_souris_filter'event and horloge_souris_filter='0') THEN
+IF donnee_souris_DIR='1' THEN
+		-- SHIFT OUT NEXT SERIAL BIT
+  IF SEND_CHAR = '1' THEN
+		-- Loop through all bits in shift register
+        IF OUTCNT <= "1001" THEN
+         OUTCNT <= OUTCNT + 1;
+		-- Shift out next bit to mouse
+         SHIFTOUT(9 DOWNTO 0) <= SHIFTOUT(10 DOWNTO 1);
+		 SHIFTOUT(10) <= '1';
+         donnee_souris_BUF <= SHIFTOUT(1);
+		 OUTPUT_READY <= '0';
+		-- END OF CHARACTER
+	 ELSE
+     	SEND_CHAR <= '0';
+		-- Signal the character has been output
+		OUTPUT_READY <= '1';
+		OUTCNT <= "0000";
+	END IF;
+  END IF;
+END IF;
+END IF;
+END PROCESS SEND_UART;
 
-    end process emiss;
+RECV_UART: PROCESS(rst, horloge_souris_filter)
+BEGIN
+IF rst='1' THEN
+	INCNT <= "0000";
+    READ_CHAR <= '0';
+	PACKET_COUNT <= "00";
+    NEW_etat_souris <= (others => '0');
+	CHARIN <= "00000000";
+ELSIF horloge_souris_FILTER'event and horloge_souris_FILTER='1' THEN
+	IF donnee_souris_DIR='0' THEN
+ 		IF donnee_souris='0' AND READ_CHAR='0' THEN
+			READ_CHAR<= '1';
+    		IREADY_SET<= '0';
+ 		ELSE
+		-- SHIFT IN NEXT SERIAL BIT
+  		IF READ_CHAR = '1' THEN
+        	IF INCNT < "1001" THEN
+         		INCNT <= INCNT + 1;
+         		SHIFTIN(7 DOWNTO 0) <= SHIFTIN(8 DOWNTO 1);
+         		SHIFTIN(8) <= donnee_souris;
+	 			IREADY_SET <= '0';
+		-- END OF CHARACTER
+	 		ELSE
+	 			CHARIN <= SHIFTIN(7 DOWNTO 0);
+     			READ_CHAR <= '0';
+	 			IREADY_SET <= '1';
+  	 			PACKET_COUNT <= PACKET_COUNT + 1;
+		-- PACKET_COUNT = "00" IS ACK COMMAND
+				IF PACKET_COUNT = "00" THEN
+		-- Set Cursor to middle of screen
+				    cursor_column <= CONV_STD_LOGIC_VECTOR(320,10);
+    				cursor_row <= CONV_STD_LOGIC_VECTOR(240,10);
+				    NEW_cursor_column <= CONV_STD_LOGIC_VECTOR(320,10);
+    				NEW_cursor_row <= CONV_STD_LOGIC_VECTOR(240,10);
+				ELSIF PACKET_COUNT = "01" THEN
+					PACKET_CHAR1 <= SHIFTIN(7 DOWNTO 0);
+	-- Limit Cursor on Screen Edges	
+	-- Check for left screen limit
+	-- All numbers are positive only, and need to check for zero wrap around.
+	-- Set limits higher since mouse can move up to 128 pixels in one packet
+					IF (cursor_row < 128) AND ((NEW_cursor_row > 256) OR
+						(NEW_cursor_row < 2)) THEN
+						cursor_row <= CONV_STD_LOGIC_VECTOR(0,10);
+			-- Check for right screen limit
+					ELSIF NEW_cursor_row > 480 THEN
+						cursor_row <= CONV_STD_LOGIC_VECTOR(480,10);
+					ELSE
+						cursor_row <= NEW_cursor_row;
+					END IF;
+			-- Check for top screen limit
+					IF (cursor_column < 128)  AND ((NEW_cursor_column > 256)  OR
+						(NEW_cursor_column < 2)) THEN
+						cursor_column <= CONV_STD_LOGIC_VECTOR(0,10);
+			-- Check for bottom screen limit
+					ELSIF NEW_cursor_column > 640 THEN
+						cursor_column <= CONV_STD_LOGIC_VECTOR(640,10);
+					ELSE
+						cursor_column <= NEW_cursor_column;
+					END IF;
+  				ELSIF PACKET_COUNT = "10" THEN
+					PACKET_CHAR2 <= SHIFTIN(7 DOWNTO 0);
+  				ELSIF PACKET_COUNT = "11" THEN
+					PACKET_CHAR3 <= SHIFTIN(7 DOWNTO 0);
+  				END IF;
+	 			INCNT <= conv_std_logic_vector(0,4);
+  				IF PACKET_COUNT = "11" THEN
+    				PACKET_COUNT <= "01";
+		-- Packet Complete, so process data in packet
+		-- Sign extend X AND Y two's complement motion values and 
+		-- add to Current Cursor Address
+		--
+		-- Y Motion is Negative since up is a lower row address
+    				NEW_cursor_row <= cursor_row - (PACKET_CHAR3(7) & 
+								PACKET_CHAR3(7) & PACKET_CHAR3);
+    				NEW_cursor_column <= cursor_column + (PACKET_CHAR2(7) & 
+								PACKET_CHAR2(7) & PACKET_CHAR2);
+                    NEW_etat_souris <= PACKET_CHAR1(7 downto 0);
+  				END IF;
+			END IF;
+  		END IF;
+ 	END IF;
+ END IF;
+END IF;
+END PROCESS RECV_UART;
 
-
-    -- le registre de reception sert soit à recevoir l'acquittement
-    -- du mot de commande precedent
-    -- soit de recevoir une trame complete
-    reception : process(recevoir, hs_filtree)
-    
-        variable nb_bits : integer range 0 to 33;
-        variable registre_reception : std_logic_vector(32 downto 0);
-        
-    begin
-    
-        if recevoir = false  then -- asynchrone
-        
-            nb_bits := 0;
-            ------    elsif falling_edge(hs_filtree) then  -- synchrone
-            
-        elsif rising_edge(hs_filtree) then  -- synchrone
-        
-            registre_reception := data_in & registre_reception(32 downto 1) ;
-            nb_bits := nb_bits + 1;
-            
-        end if;
-        
-        if nb_bits = 11 then
-            fin_octet <= '1';
-            -- traitement ignoré pour l'instant
-        else
-            fin_octet <= '0';
-        end if;
-        
-        if nb_bits = 33 then
-            fin_trame <= '1';
-        else
-            fin_trame <= '0';
-        end if;
-        
-        mouvement_v <= signed(registre_reception(6) &   -- Signe de la position en Y
-        registre_reception(30 downto 23));    -- Octet 3: position en Y
-        mouvement_h <= signed(registre_reception(5) &   -- Signe de la position en X
-        registre_reception(19 downto 12));    -- Octet 2: position en X
-        sig_etat_souris <= registre_reception(8 downto 1);
-        
-    end process reception;
-
--- pour le calcul de position, on considere que la sortie
-  -- est un écran de 640 (horizontal)par 480 (vertical) pixels .
-  -- Au départ on se situe au milieu de l'ecran (0,0)
-  -- on doit limiter les excursions à +319 -320 et +239 et -240 
-  calc: process
-    variable registre_h  : signed(10 downto 0); 
-    variable registre_v  : signed(10 downto 0);
-    constant limite_gh : integer := -320;
-    constant limite_dh : integer := +319;
-    constant limite_bv : integer := -240;
-    constant limite_hv : integer := +239;
-    
-  begin  -- process
-    wait until rising_edge(mclk);  -- synchrone
-    if init_tempo then                   -- initialisation au depart
-      registre_h := (others => '0');
-      registre_v := (others => '0');
-      etat_souris <= (others => '0');
-    elsif calculer then                  -- accumulation
-      registre_h := registre_h + mouvement_h;
-      registre_v := registre_v + mouvement_v;
-      if registre_h > limite_dh then     -- saturation de la sortie
-        registre_h := to_signed(limite_dh,11);
-      elsif registre_h < limite_gh then
-        registre_h := to_signed(limite_gh,11);
-      end if;
-      if registre_v > limite_hv then
-        registre_v := to_signed(limite_hv,11);
-      elsif registre_v < limite_bv then
-        registre_v := to_signed(limite_bv,11); 
-      end if;
-      position_v <= std_logic_vector (registre_v(9 downto 0));         -- les sorties 
-      position_h <= std_logic_vector (registre_h(9 downto 0));
-      etat_souris <= sig_etat_souris;
-    end if;
-  end process;
-
-  -- le sequenceur enchaine les differentes etapes et boucle
-  -- sur la reception des trames et leur traitement
-  sequenceur: process
-  begin  -- process sequenceur
-    wait until rising_edge(mclk);  -- synchrone
-    if rst = '1' then
-      state_mef <= debut;
-    else
-      case state_mef is
-      
-        when debut =>
-            state_mef <= tempo;
-            
-        when tempo => 
-            if fin_tempo = '1' then
-                state_mef <= rts;
-            end if;
-            
-        when rts => 
-            state_mef <= emission;
-            
-        when emission => 
-            if fin_emission = '1' then
-                state_mef <= reception1;
-            end if;
-            
-        when reception1 => 
-            if fin_octet = '1'  then
-                state_mef <= debut_trame ;
-            end if;
-        when debut_trame 
-        =>  
-            state_mef <= reception3;
-            
-        when reception3 => 
-            if fin_trame = '1' then
-                state_mef <= calcul;
-            end if;
-            
-        when calcul =>  
-            state_mef <= reception3;
-            
-      end case;
-    end if;
-  end process sequenceur;
-
-  init_tempo <= (state_mef = debut);
-
-  direction_horloge <= (state_mef = tempo);
-
-  emettre <= (state_mef = emission);
-
-  direction_donnee <= (state_mef = emission) or (state_mef = rts) ;
-
-  recevoir <= (state_mef = reception1) or (state_mef = reception3);
-
-  calculer <= (state_mef = calcul);
-
-end arch_mouse_driver; 
+END behavior;
