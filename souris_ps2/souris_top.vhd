@@ -35,18 +35,19 @@ architecture arch_souris_top of souris_top is
     signal sig_etat_souris    :  std_logic_vector(7 DOWNTO 0);
 
 
-    component pilote_souris 
-      
-      port (
-        mclk : in std_logic;  -- horloge systeme
-        rst : in std_logic;  -- reset general du circuit
-        
-        donnee_souris  : inout std_logic;   -- bidirectionnel
-        horloge_souris : inout std_logic;   -- la souris fournie l'horloge
-        
-        position_h     : out   std_logic_vector(9 downto 0);  -- excursion 
-        position_v     : out   std_logic_vector(9 downto 0);  -- 
-        etat_souris    : out   std_logic_vector(7 DOWNTO 0)
+    component mouse_driver is
+  
+        port 
+        (
+            mclk : in std_logic;  -- horloge systeme
+            rst : in std_logic;  -- reset general du circuit
+
+            donnee_souris  : inout std_logic;   -- bidirectionnel
+            horloge_souris : inout std_logic;   -- la souris fournie l'horloge
+
+            position_h     : out   std_logic_vector(9 downto 0);  -- excursion -512 à +511
+            position_v     : out   std_logic_vector(9 downto 0);  -- -512 +511
+            etat_souris    : out   std_logic_vector(7 downto 0)
         );
 
     end component;
@@ -116,7 +117,7 @@ architecture arch_souris_top of souris_top is
 
 begin
 
-    m_pilote_souris : pilote_souris 
+    m_mouse_driver : mouse_driver 
         port map 
         (
             mclk => sig_mclk, 
