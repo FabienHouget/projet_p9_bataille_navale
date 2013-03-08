@@ -1,0 +1,28 @@
+NET "mclk" LOC = "B8";
+
+NET "rst" LOC = "H13";
+
+NET "an<0>" LOC = "F17";
+NET "an<1>" LOC = "H17";
+NET "an<2>" LOC = "C18";
+NET "an<3>" LOC = "F15";
+
+NET "a_to_g<0>" LOC = "H14";
+NET "a_to_g<1>" LOC = "J17";
+NET "a_to_g<2>" LOC = "G14";
+NET "a_to_g<3>" LOC = "D16";
+NET "a_to_g<4>" LOC = "D17";
+NET "a_to_g<5>" LOC = "F18";
+NET "a_to_g<6>" LOC = "L18";
+
+NET "state_souris<7>" LOC = "R4";
+NET "state_souris<6>" LOC = "F4";
+NET "state_souris<5>" LOC = "P15";
+NET "state_souris<4>" LOC = "E17";
+NET "state_souris<3>" LOC = "K14";
+NET "state_souris<2>" LOC = "K15";
+NET "state_souris<1>" LOC = "J15";
+NET "state_souris<0>" LOC = "J14";
+
+NET "data_mouse" lOC = "P11";
+NET "clk_mouse" LOC = "R12";

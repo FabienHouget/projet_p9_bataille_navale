@@ -4,18 +4,20 @@ use ieee.std_logic_unsigned.all;
 use ieee.numeric_std.all;
 
 
-ENTITY pilote_souris IS
+entity pilote_souris is
   
-  PORT (
+  port 
+  (
     mclk : in std_logic;  -- horloge systeme
     rst : in std_logic;  -- reset general du circuit
+    
     donnee_souris  : inout std_logic;   -- bidirectionnel
     horloge_souris : inout std_logic;   -- la souris fournie l'horloge
-    bouton_gauche  : out   std_logic;  -- indique un appui
-    bouton_milieu  : out   std_logic;  -- indique un appui
-    bouton_droit   : out   std_logic;  -- indique un appui
+
     position_h     : out   std_logic_vector(9 DOWNTO 0);  -- excursion -512 à +511
-    position_v     : out   std_logic_vector(9 DOWNTO 0));  -- -512 +511
+    position_v     : out   std_logic_vector(9 DOWNTO 0);  -- -512 +511
+    etat_souris    : out   std_logic_vector(7 DOWNTO 0)
+   );
 
 END pilote_souris;
 
@@ -26,9 +28,7 @@ ARCHITECTURE enseirb OF pilote_souris IS
   SIGNAL  direction_horloge : boolean; 
   SIGNAL mouvement_h : signed(8 DOWNTO 0);
   SIGNAL mouvement_v : signed(8 DOWNTO 0);
-  SIGNAL droit : std_logic;
-  SIGNAL gauche : std_logic;
-  SIGNAL milieu : std_logic;
+  signal sig_etat_souris : std_logic_vector(7 DOWNTO 0);
   
   TYPE t_etat IS (debut, tempo, rts, emission,
                   reception1, debut_trame, reception3,calcul);
@@ -135,9 +135,7 @@ BEGin  -- enseirb
                           registre_reception(30 DOWNTO 23));    -- Octet 3: position en Y
     mouvement_h <= signed(registre_reception(5) &   -- Signe de la position en X
                           registre_reception(19 DOWNTO 12));    -- Octet 2: position en X
-    gauche <= registre_reception(1);
-    milieu <= registre_reception(3);
-    droit <= registre_reception(2);
+    sig_etat_souris <= registre_reception(8 downto 1);
   END PROCESS reception;
 
 -- pour le calcul de position, on considere que la sortie
@@ -157,9 +155,7 @@ BEGin  -- enseirb
     IF init_tempo THEN                   -- initialisation au depart
       registre_h := (OTHERS => '0');
       registre_v := (OTHERS => '0');
-      bouton_gauche <= '0';
-      bouton_droit <= '0';
-      bouton_milieu <= '0';
+      etat_souris <= (others => '0');
     ELSIF calculer THEN                  -- accumulation
       registre_h := registre_h + mouvement_h;
       registre_v := registre_v + mouvement_v;
@@ -175,9 +171,7 @@ BEGin  -- enseirb
       END IF;
       position_v <= std_logic_vector (registre_v(9 DOWNTO 0));         -- les sorties 
       position_h <= std_logic_vector (registre_h(9 DOWNTO 0));
-      bouton_gauche <= gauche;
-      bouton_droit <= droit;
-      bouton_milieu <= milieu;
+      etat_souris <= sig_etat_souris;
     END IF;
   END PROCESS;
 

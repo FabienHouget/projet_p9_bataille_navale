@@ -11,7 +11,8 @@ entity clkdiv is
         rst : in  std_logic;
         
         clk3 : out  std_logic;
-        clk190 : out  std_logic
+        clk190 : out  std_logic;
+        clk25M : out std_logic
     );
            
 end clkdiv;
@@ -35,6 +36,7 @@ begin
             count := count + 1;
             clk3 <= count(23);  -- 50MHz/2^(23+1) = 3Hz
             clk190 <= count(17);    -- 50MHz/2^(17+1) = 190Hz
+            clk25M <= count(0);
             
     end if;
      

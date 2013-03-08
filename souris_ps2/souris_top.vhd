@@ -13,9 +13,7 @@ entity souris_top is
         data_mouse  : inout std_logic;
         clk_mouse : inout std_logic;
         
-        bouton_gauche, bouton_milieu, bouton_droit : out  std_logic;
-        sign_position_h : out std_logic;
-        sign_position_v : out std_logic;
+        state_souris : out std_logic_vector(7 downto 0);
         an: out std_logic_vector(3 downto 0);
         a_to_g:out std_logic_vector(6 downto 0)
     );
@@ -32,11 +30,9 @@ architecture arch_souris_top of souris_top is
 
     signal sig_position_h, sig_position_v : std_logic_vector(9 downto 0);
     signal sig_position_h_stored, sig_position_v_stored : std_logic_vector(7 downto 0);
-    
-    signal sig_bouton_gauche, sig_bouton_gauche_stored : std_logic;
-    signal sig_bouton_droit, sig_bouton_droit_stored : std_logic; 
-    signal sig_bouton_milieu, sig_bouton_milieu_stored : std_logic;
-    signal sig_sign_position_v_stored, sig_sign_position_h_stored : std_logic;
+
+    signal sig_mclk : std_logic;    --
+    signal sig_etat_souris    :  std_logic_vector(7 DOWNTO 0);
 
 
     component pilote_souris 
@@ -48,11 +44,10 @@ architecture arch_souris_top of souris_top is
         donnee_souris  : inout std_logic;   -- bidirectionnel
         horloge_souris : inout std_logic;   -- la souris fournie l'horloge
         
-        bouton_gauche  : out   std_logic;  -- indique un appui
-        bouton_milieu  : out   std_logic;  -- indique un appui
-        bouton_droit   : out   std_logic;  -- indique un appui
         position_h     : out   std_logic_vector(9 downto 0);  -- excursion 
-        position_v     : out   std_logic_vector(9 downto 0));  -- 
+        position_v     : out   std_logic_vector(9 downto 0);  -- 
+        etat_souris    : out   std_logic_vector(7 DOWNTO 0)
+        );
 
     end component;
 
@@ -65,7 +60,8 @@ architecture arch_souris_top of souris_top is
             rst : in  std_logic;
             
             clk3 : out  std_logic;
-            clk190 : out  std_logic
+            clk190 : out  std_logic;
+            clk25M : out std_logic
         );
                
     end component;
@@ -93,17 +89,11 @@ architecture arch_souris_top of souris_top is
         (         
             clk : in std_logic;
             rst : in std_logic;
-            bouton_gauche : in std_logic;
-            bouton_milieu : in std_logic;
-            bouton_droit : in std_logic;
+            etat_souris : in std_logic_vector(7 downto 0);
             data_v : in std_logic_vector(8 downto 0);
             data_h : in std_logic_vector(8 downto 0);
-            
-            bouton_gauche_stored : out std_logic;
-            bouton_milieu_stored : out std_logic;
-            bouton_droit_stored : out std_logic;
-            sign_position_v_stored : out std_logic;
-            sign_position_h_stored : out std_logic;
+                
+            stored_etat_souris : out std_logic_vector(7 downto 0);
             stored_data_v : out std_logic_vector(7 downto 0);
             stored_data_h : out std_logic_vector(7 downto 0)
         );
@@ -129,15 +119,13 @@ begin
     m_pilote_souris : pilote_souris 
         port map 
         (
-            mclk => mclk, 
+            mclk => sig_mclk, 
             rst => rst, 
             
             donnee_souris => data_mouse, 
             horloge_souris => clk_mouse,
             
-            bouton_gauche => sig_bouton_gauche, 
-            bouton_droit => sig_bouton_droit, 
-            bouton_milieu => sig_bouton_milieu,
+            etat_souris => sig_etat_souris,
             position_h => sig_position_h, 
             position_v => sig_position_v
 
@@ -150,7 +138,8 @@ begin
             mclk => mclk,
             rst => rst,
             clk3 => sig_clk3,
-            clk190 => sig_clk190
+            clk190 => sig_clk190,
+            clk25M => sig_mclk
         );
 
 
@@ -182,28 +171,17 @@ begin
         (
             clk => sig_clk3,
             rst => rst,
-            bouton_gauche => sig_bouton_gauche,
-            bouton_milieu => sig_bouton_milieu,
-            bouton_droit => sig_bouton_droit,
+            etat_souris => sig_etat_souris,
             data_v => sig_position_v(8 downto 0),
             data_h => sig_position_h(8 downto 0),
             
-            bouton_gauche_stored => sig_bouton_gauche_stored,
-            bouton_milieu_stored => sig_bouton_milieu_stored,
-            bouton_droit_stored => sig_bouton_droit_stored,
-            sign_position_v_stored => sig_sign_position_v_stored,
-            sign_position_h_stored => sig_sign_position_h_stored,
+           
+            stored_etat_souris => state_souris,
             stored_data_v => sig_position_v_stored,
             stored_data_h => sig_position_h_stored
             
         );
 
-
-    sign_position_h <= sig_sign_position_h_stored;
-    sign_position_v <= sig_sign_position_v_stored;
-    bouton_gauche <= sig_bouton_gauche_stored;
-    bouton_droit <= sig_bouton_droit_stored;
-    bouton_milieu <= sig_bouton_milieu_stored;
     
 end arch_souris_top;
 
